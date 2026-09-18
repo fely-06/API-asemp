@@ -1,0 +1,121 @@
+/* =============================
+   ESTILO PROFESIONAL API ASEMP
+   ============================= */
+
+/* ===== PALETA DE COLORES ===== */
+:root {
+    --color-primario: #4b2a2d; /* Guinda principal */
+    --color-primario-oscuro: #713f43; /* Hover guinda */
+    --color-texto: #2b2b2b;
+    --color-fondo: #f8f9fa;
+    --color-blanco: #ffffff;
+    --color-gris: #555555;
+}
+
+/* ===== ESTILO GLOBAL ===== */
+body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background-color: var(--color-fondo);
+    color: var(--color-texto);
+}
+
+/* ===== NAVBAR ===== */
+.custom-navbar {
+    background: linear-gradient(90deg, var(--color-primario), var(--color-primario-oscuro));
+    padding: 0.8rem 0;
+}
+
+.navbar-brand span {
+    color: var(--color-blanco);
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+.nav-link {
+    color: #f0eaea !important;
+    font-weight: 500;
+    transition: color 0.2s ease;
+}
+
+    .nav-link:hover {
+        color: var(--color-blanco) !important;
+    }
+
+/* ===== CONTENIDO CENTRAL ===== */
+main {
+    background-color: var(--color-fondo);
+}
+
+h1.display-4,
+h1.display-4.text-primary {
+    font-weight: 700;
+    color: var(--color-primario) !important;
+}
+
+.lead {
+    color: var(--color-gris);
+}
+
+/* ===== BOTONES ===== */
+.btn-primary {
+    background-color: var(--color-primario) !important;
+    border-color: var(--color-primario) !important;
+    color: var(--color-blanco) !important;
+    font-weight: 500;
+}
+
+    .btn-primary:hover,
+    .btn-primary:focus {
+        background-color: var(--color-primario-oscuro) !important;
+        border-color: var(--color-primario-oscuro) !important;
+    }
+
+.btn-outline-primary {
+    color: var(--color-primario) !important;
+    border-color: var(--color-primario) !important;
+    font-weight: 500;
+}
+
+    .btn-outline-primary:hover,
+    .btn-outline-primary:focus {
+        background-color: var(--color-primario) !important;
+        border-color: var(--color-primario) !important;
+        color: var(--color-blanco) !important;
+    }
+
+/* ===== LINKS Y FOCOS ===== */
+a, a:hover, a:focus {
+    color: var(--color-primario) !important;
+    text-decoration: none;
+}
+
+    a:hover {
+        color: var(--color-primario-oscuro) !important;
+        text-decoration: underline;
+    }
+
+/* ===== FOOTER ===== */
+.custom-footer {
+    background: var(--color-primario);
+    color: var(--color-blanco);
+    font-size: 0.9rem;
+}
+
+/* ===== FOCOS DE BOTÓN ===== */
+.btn:focus, .btn:active:focus {
+    box-shadow: 0 0 0 0.2rem rgba(75, 42, 45, 0.4) !important;
+}
+
+/* ===== ESTADOS ACTIVOS ===== */
+.active, .btn-check:checked + .btn, .btn.active {
+    background-color: var(--color-primario-oscuro) !important;
+    border-color: var(--color-primario-oscuro) !important;
+    color: var(--color-blanco) !important;
+}
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 768px) {
+    h1.display-4 {
+        font-size: 1.8rem;
+    }
+}

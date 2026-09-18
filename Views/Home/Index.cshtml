@@ -1,0 +1,29 @@
+﻿@{
+    ViewData["Title"] = "API Asemp - Servicio SAT";
+}
+
+<div class="text-center mt-5">
+    <h1 class="display-4 text-primary">API Asemp</h1>
+    <p class="lead">Sistema para la descarga automatizada de CFDI y documentos fiscales desde el SAT.</p>
+
+    <div class="mt-4">
+        <a href="https://www.asemp.com.mx/inicio" class="btn btn-outline-primary">Ir al sitio de Asemp</a>
+        <a href="/swagger" class="btn btn-primary ms-2">Ver Endpoints API</a>
+    </div>
+
+    <section class="mt-5 text-start">
+        <h3>Descripción general</h3>
+        <p>
+            Este servicio permite conectarse al portal del SAT mediante la e.firma para:
+        </p>
+        <ul>
+            <li>Descargar facturas emitidas y recibidas (XML / PDF).</li>
+            <li>Verificar el estado de las solicitudes de descarga masiva.</li>
+            <li>Obtener constancias y opiniones de cumplimiento.</li>
+        </ul>
+        <p>
+            Las descargas se pueden programar automáticamente para ejecutarse en horarios definidos,
+            optimizando tiempo y evitando la saturación del portal del SAT.
+        </p>
+    </section>
+</div>
