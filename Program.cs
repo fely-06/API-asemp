@@ -203,6 +203,9 @@ builder.Services.AddScoped<Catalogos>();
 
 builder.Services.AddScoped<CertificadosService>();
 
+// ======== ENVÍO DE CORREOS (SMTP) ========
+builder.Services.AddScoped<IEmailService, SmtpEmailService>();
+
 builder.Services.AddScoped<VerificacionesSAT_Datos>();
 
 builder.Services.AddScoped<ITableroFiscalService, TableroFiscalService>();

@@ -1,6 +1,7 @@
 ﻿using API_asemp.Contextos;
 using API_asemp.Models.BD;
 using API_asemp.Models;
+using API_asemp.Servicios;
 using Herramientas.Validaciones;
 using BCrypt.Net; // 👈 importante para usar HashPassword y Verify
 
@@ -9,10 +10,12 @@ namespace API_asemp.Datos
     public class Usuarios
     {
         private readonly myDbContext _db;
+        private readonly IEmailService _emailService;
 
-        public Usuarios(myDbContext db)
+        public Usuarios(myDbContext db, IEmailService emailService)
         {
             _db = db;
+            _emailService = emailService;
         }
 
         // ================================
@@ -70,6 +73,10 @@ namespace API_asemp.Datos
             if (rol != null && rol.nombre.ToLower() != "cliente" && usuario.departamento_id == null)
                 return Estatus<bool>.Error("Selecciona un departamento antes de continuar.");
 
+            // 🔐 Guardamos la contraseña en texto plano SOLO en memoria,
+            // exclusivamente para poder enviarla por correo. Nunca se persiste así en BD.
+            string contrasenaPlano = usuario.contrasena!;
+
             // ✅ Encriptar contraseña antes de guardar
             usuario.contrasena = BCrypt.Net.BCrypt.HashPassword(usuario.contrasena);
 
@@ -78,7 +85,38 @@ namespace API_asemp.Datos
             _db.usuarios.Add(usuario);
             _db.SaveChanges();
 
+            // 📧 Enviar credenciales de acceso por correo (SMTP).
+            // No bloquea ni revierte el registro si el envío falla.
+            _ = EnviarCorreoCredencialesAsync(usuario, contrasenaPlano);
+
             return Estatus<bool>.OK("Usuario guardado correctamente");
+        }
+
+        // ================================
+        //   ENVIAR CREDENCIALES POR CORREO
+        // ================================
+        private async Task EnviarCorreoCredencialesAsync(Usuario usuario, string contrasenaPlano)
+        {
+            try
+            {
+                string asunto = "Tus credenciales de acceso - API Asemp";
+                string cuerpoHtml = $@"
+                    <p>Hola {usuario.nombres} {usuario.apellido_paterno},</p>
+                    <p>Se ha creado tu cuenta en el sistema de <strong>Asesoría Empresarial</strong>.</p>
+                    <p>
+                        <strong>Usuario:</strong> {usuario.usuario}<br/>
+                        <strong>Contraseña:</strong> {contrasenaPlano}
+                    </p>
+                    <p>Por tu seguridad, te recomendamos cambiar tu contraseña después de iniciar sesión
+                       y no compartir este correo con nadie.</p>";
+
+                await _emailService.EnviarAsync(usuario.correo!, asunto, cuerpoHtml);
+            }
+            catch (Exception ex)
+            {
+                // No se interrumpe el registro del usuario si el correo falla.
+                Console.WriteLine($"❌ Error enviando correo de credenciales a {usuario.correo}: {ex.Message}");
+            }
         }
 
 
