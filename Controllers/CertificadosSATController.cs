@@ -7,6 +7,7 @@ using API_asemp.Utilerias;
 using Herramientas.Validaciones;
 using Microsoft.AspNetCore.Authorization; // ← necesario para [Authorize]
 using Microsoft.AspNetCore.Mvc;
+using System.IO.Compression;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -27,15 +28,18 @@ namespace API_asemp.Controllers
         private readonly CertificadosSAT _certificados;
         private readonly SatService _satService;
         private readonly myDbContext _db;      // 👈 aquí guardamos el DbContext
+        private readonly IEmailService _emailService;
 
         // Se recibe la clase CertificadosSAT desde la capa de datos
         public CertificadosSATController(
             CertificadosSAT certificadosService,
-            SatService satService, myDbContext db)
+            SatService satService, myDbContext db,
+            IEmailService emailService)
         {
             _certificados = certificadosService;
             _satService = satService;
             _db = db;
+            _emailService = emailService;
         }
 
         // BasePath igual que en DescargasSATController
@@ -386,6 +390,103 @@ namespace API_asemp.Controllers
         }
 
 
+        //==============================================================================================================================\\
+        // ===============================================================
+        // ENVIAR POR CORREO (.cer, .key, .pfx, contraseña) EN UN ZIP
+        // ===============================================================
+        // POST certificadossat/enviar-correo/5
+        // Body opcional: { "correo": "otro@correo.com" }
+        // Si no se envía "correo", se usa el correo registrado del cliente.
+        [RequireAccion("certificados.ver")]
+        [HttpPost("enviar-correo/{id:int}")]
+        public async Task<IActionResult> EnviarCorreo(int id, [FromBody] EnviarCertificadoCorreoDTO? body)
+        {
+            try
+            {
+                var cert = _certificados.Get(id);
+                if (cert == null)
+                    return NotFound("Certificado no encontrado.");
+
+                // Resolver destinatario: el que venga en el body, o el correo del cliente dueño del certificado
+                var destinatario = !string.IsNullOrWhiteSpace(body?.correo)
+                    ? body!.correo!.Trim()
+                    : _db.clientes.FirstOrDefault(c => c.id == cert.cliente_id)?.correo_electronico;
+
+                if (string.IsNullOrWhiteSpace(destinatario))
+                    return BadRequest("El cliente no tiene correo registrado. Especifica uno en el cuerpo de la petición (\"correo\").");
+
+                // Archivos candidatos a incluir en el ZIP, con su nombre de salida
+                var baseNombre = string.IsNullOrWhiteSpace(cert.rfc) ? $"cert_{cert.id}" : cert.rfc;
+                var candidatos = new (string? rutaRel, string nombreEnZip)[]
+                {
+                    (cert.archivo_cer, $"{baseNombre}.cer"),
+                    (cert.archivo_key, $"{baseNombre}.key"),
+                    (cert.archivo_pfx, $"{baseNombre}.pfx"),
+                };
+
+                byte[] zipBytes;
+                int archivosIncluidos = 0;
+
+                using (var zipStream = new MemoryStream())
+                {
+                    using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
+                    {
+                        foreach (var (rutaRel, nombreEnZip) in candidatos)
+                        {
+                            if (string.IsNullOrWhiteSpace(rutaRel)) continue;
+
+                            var full = SafeJoin(BasePath, rutaRel) ?? rutaRel;
+                            if (!System.IO.File.Exists(full)) continue;
+
+                            var entry = archive.CreateEntry(nombreEnZip, CompressionLevel.Optimal);
+                            using var entryStream = entry.Open();
+                            using var fileStream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.Read);
+                            await fileStream.CopyToAsync(entryStream);
+                            archivosIncluidos++;
+                        }
+
+                        // Incluir la contraseña como .txt dentro del mismo ZIP
+                        if (!string.IsNullOrWhiteSpace(cert.contrasena))
+                        {
+                            var entry = archive.CreateEntry($"password_{baseNombre}.txt", CompressionLevel.Optimal);
+                            using var entryStream = entry.Open();
+                            var pwdBytes = Encoding.UTF8.GetBytes(cert.contrasena);
+                            await entryStream.WriteAsync(pwdBytes);
+                            archivosIncluidos++;
+                        }
+                    }
+
+                    zipBytes = zipStream.ToArray();
+                }
+
+                if (archivosIncluidos == 0)
+                    return NotFound("No hay archivos disponibles en el servidor para este certificado.");
+
+                var nombreZip = $"certificado_{baseNombre}.zip";
+                var asunto = $"Certificados SAT - {baseNombre}";
+                var cuerpoHtml =
+                    $"<p>Hola,</p>" +
+                    $"<p>Adjunto encontrarás los archivos del certificado SAT con RFC <b>{baseNombre}</b> " +
+                    $"comprimidos en un archivo ZIP.</p>" +
+                    $"<p>Este correo fue generado automáticamente, por favor resguarda estos archivos con precaución.</p>";
+
+                var adjunto = new EmailAttachment(nombreZip, zipBytes, "application/zip");
+                await _emailService.EnviarConAdjuntosAsync(destinatario!, asunto, cuerpoHtml, new[] { adjunto });
+
+                return Ok(new
+                {
+                    ok = true,
+                    mensaje = $"Correo enviado a {destinatario}.",
+                    destinatario,
+                    archivo = nombreZip,
+                    archivosIncluidos
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { ok = false, mensaje = $"Error enviando el correo: {ex.Message}" });
+            }
+        }
 
 
 

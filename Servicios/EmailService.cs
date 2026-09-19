@@ -11,6 +11,26 @@ namespace API_asemp.Servicios
     public interface IEmailService
     {
         Task EnviarAsync(string destinatario, string asunto, string cuerpoHtml);
+
+        // Envía un correo con uno o más archivos adjuntos (ej. un .zip con .cer/.key/.pfx)
+        Task EnviarConAdjuntosAsync(string destinatario, string asunto, string cuerpoHtml, IEnumerable<EmailAttachment> adjuntos);
+    }
+
+    // ======================================================
+    // 🔹 Representa un archivo a adjuntar en un correo.
+    // ======================================================
+    public class EmailAttachment
+    {
+        public string NombreArchivo { get; }
+        public byte[] Contenido { get; }
+        public string ContentType { get; }
+
+        public EmailAttachment(string nombreArchivo, byte[] contenido, string contentType = "application/octet-stream")
+        {
+            NombreArchivo = nombreArchivo;
+            Contenido = contenido;
+            ContentType = contentType;
+        }
     }
 
     // ======================================================
@@ -26,7 +46,10 @@ namespace API_asemp.Servicios
             _config = config;
         }
 
-        public async Task EnviarAsync(string destinatario, string asunto, string cuerpoHtml)
+        public Task EnviarAsync(string destinatario, string asunto, string cuerpoHtml)
+            => EnviarConAdjuntosAsync(destinatario, asunto, cuerpoHtml, Array.Empty<EmailAttachment>());
+
+        public async Task EnviarConAdjuntosAsync(string destinatario, string asunto, string cuerpoHtml, IEnumerable<EmailAttachment> adjuntos)
         {
             if (string.IsNullOrWhiteSpace(destinatario))
             {
@@ -60,14 +83,25 @@ namespace API_asemp.Servicios
             };
             mensaje.To.Add(destinatario);
 
-            using var cliente = new SmtpClient(host, port)
-            {
-                Credentials = new NetworkCredential(user, password),
-                EnableSsl = enableSsl
-            };
+            // Los MemoryStream de los adjuntos deben permanecer vivos hasta
+            // que el correo se envíe, así que los liberamos al final (finally).
+            var streamsAdjuntos = new List<MemoryStream>();
 
             try
             {
+                foreach (var adj in adjuntos)
+                {
+                    var ms = new MemoryStream(adj.Contenido);
+                    streamsAdjuntos.Add(ms);
+                    mensaje.Attachments.Add(new Attachment(ms, adj.NombreArchivo, adj.ContentType));
+                }
+
+                using var cliente = new SmtpClient(host, port)
+                {
+                    Credentials = new NetworkCredential(user, password),
+                    EnableSsl = enableSsl
+                };
+
                 await cliente.SendMailAsync(mensaje);
                 Console.WriteLine($"✅ Correo enviado correctamente a {destinatario}");
             }
@@ -76,6 +110,10 @@ namespace API_asemp.Servicios
                 // No se relanza la excepción: un fallo de correo no debe
                 // tumbar el flujo de negocio (ej. creación de usuario).
                 Console.WriteLine($"❌ Error enviando correo a {destinatario}: {ex.Message}");
+            }
+            finally
+            {
+                foreach (var ms in streamsAdjuntos) ms.Dispose();
             }
         }
     }
