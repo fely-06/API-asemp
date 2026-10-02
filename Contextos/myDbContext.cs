@@ -50,6 +50,13 @@ namespace API_asemp.Contextos
                 entity.Property(j => j.FechaProgramada)
                       .HasColumnType("timestamp with time zone");
             });
+
+            builder.Entity<SatJobCliente>(entity =>
+            {
+                // Hora UTC del envío escalonado de cada cliente
+                entity.Property(c => c.FechaEnvioProgramada)
+                      .HasColumnType("timestamp with time zone");
+            });
         }
 
 

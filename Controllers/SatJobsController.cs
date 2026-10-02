@@ -40,7 +40,10 @@ namespace API_asemp.Controllers
             {
                 Ensure.ValidarNulo(dto, "El objeto DTO no puede ser nulo.");
 
-                if (dto.ClientesIds == null || dto.ClientesIds.Count == 0)
+                dto.ClientesIds ??= new List<int>();
+                dto.ClientesDiariosIds ??= new List<int>();
+
+                if (dto.ClientesIds.Count == 0 && dto.ClientesDiariosIds.Count == 0)
                     return BadRequest("Debe seleccionar al menos un cliente.");
 
 
@@ -72,9 +75,10 @@ namespace API_asemp.Controllers
                 Console.WriteLine($"FECHA PROGRAMADA = {dto.FechaProgramada} ({dto.FechaProgramada.Kind})");
 
 
-                var job = await _jobs.CrearJobAsync(dto);
+                // Crea 1 job "Unica" y/o 1 job "Diaria" (clientes en orden alfabético, 5 min entre cada uno)
+                var jobsCreados = await _jobs.CrearJobsAsync(dto);
 
-                var jobDTO = new
+                var jobsDTO = jobsCreados.Select(job => new
                 {
                     id = job.Id,
                     tipoSolicitud = job.TipoSolicitud,
@@ -82,15 +86,20 @@ namespace API_asemp.Controllers
                     rangoFin = job.RangoFin,
                     fechaProgramada = job.FechaProgramada,
                     intervaloVerificacionMin = job.IntervaloVerificacionMin,
+                    intervaloEntreClientesMin = job.IntervaloEntreClientesMin,
                     maxReintentos = job.MaxReintentos,
+                    recurrencia = job.Recurrencia,
                     estado = job.Estado
-                };
+                }).ToList();
 
                 return Ok(new
                 {
                     ok = true,
-                    mensaje = "Job creado correctamente.",
-                    job = jobDTO
+                    mensaje = jobsDTO.Count == 1
+                        ? "Job creado correctamente."
+                        : "Jobs creados correctamente.",
+                    job = jobsDTO.FirstOrDefault(),   // compatibilidad con el front anterior
+                    jobs = jobsDTO
                 });
             }
             catch (Exception ex)
@@ -179,20 +188,27 @@ namespace API_asemp.Controllers
                         j.RangoFin,
                         j.FechaProgramada,
                         j.IntervaloVerificacionMin,
+                        j.IntervaloEntreClientesMin,
                         j.MaxReintentos,
+                        j.Recurrencia,
                         j.Estado,
                         j.MensajeError,
                         j.FechaCreacion,
                         j.FechaUltimaEjecucion,
 
-                        Clientes = j.Clientes.Select(c => new
-                        {
-                            c.Id,
-                            c.ClienteId,
-                            c.Estado,
-                            c.Intentos,
-                            c.MensajeError
-                        }),
+                        Clientes = j.Clientes
+                            .OrderBy(c => c.FechaEnvioProgramada)
+                            .ThenBy(c => c.Id)
+                            .Select(c => new
+                            {
+                                c.Id,
+                                c.ClienteId,
+                                NombreCliente = c.Cliente.razon_social,
+                                c.Estado,
+                                c.Intentos,
+                                c.MensajeError,
+                                c.FechaEnvioProgramada
+                            }),
 
                         Logs = j.Logs
                             .OrderByDescending(l => l.Fecha)

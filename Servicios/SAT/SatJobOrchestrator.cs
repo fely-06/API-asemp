@@ -37,28 +37,53 @@ namespace API_asemp.Servicios.SAT
 
                 try
                 {
+                    // ¿Este ciclo verifica/descarga? (solo cuenta para el intervalo de verificación)
+                    bool marcarEjecucion = false;
+
                     switch (job.Estado)
                     {
                         case "Pendiente":
                             await _jobs.CambiarEstadoJobAsync(job.Id, "Solicitando");
                             await EnviarSolicitudes(job, token);
+                            marcarEjecucion = true;
                             break;
 
                         case "Solicitando":
                         case "Verificando":
                         case "Descargando":
-                            await VerificarYDescargar(job, token);
+                            // 1) Envío escalonado: si a algún cliente ya le toca, se le manda su solicitud
+                            if (job.Clientes.Any(c => EstaListoParaEnviar(c, ahora)))
+                                await EnviarSolicitudes(job, token);
+
+                            // 2) Verificación / descarga cada IntervaloVerificacionMin
+                            if (job.FechaUltimaEjecucion == null ||
+                                job.FechaUltimaEjecucion.Value.AddMinutes(job.IntervaloVerificacionMin) <= ahora)
+                            {
+                                await VerificarYDescargar(job, token);
+                                marcarEjecucion = true;
+                            }
                             break;
                     }
 
-                    // Muy importante: registrar que este job se procesó en este ciclo
-                    await _jobs.MarcarEjecucionAsync(job.Id);
+                    // Registrar que este job verificó en este ciclo. Los ciclos que solo envían una
+                    // solicitud escalonada NO cuentan, para no retrasar la verificación de los clientes anteriores.
+                    if (marcarEjecucion)
+                        await _jobs.MarcarEjecucionAsync(job.Id);
                 }
                 catch (Exception ex)
                 {
-                    // Si algo truena a nivel job, lo registramos como error en el job
-                    await _jobs.CambiarEstadoJobAsync(job.Id, "Error", ex.Message);
-                    await _jobs.AgregarLog(job.Id, null, "JOB_ERROR", ex.Message);
+                    if (job.Recurrencia == "Diaria")
+                    {
+                        // Un error de hoy no debe detener las descargas de mañana
+                        await _jobs.AgregarLog(job.Id, null, "JOB_ERROR", ex.Message);
+                        await _jobs.ReprogramarJobDiarioAsync(job.Id);
+                    }
+                    else
+                    {
+                        // Si algo truena a nivel job, lo registramos como error en el job
+                        await _jobs.CambiarEstadoJobAsync(job.Id, "Error", ex.Message);
+                        await _jobs.AgregarLog(job.Id, null, "JOB_ERROR", ex.Message);
+                    }
                 }
             }
         }
@@ -68,15 +93,22 @@ namespace API_asemp.Servicios.SAT
         // =========================================================
         private async Task EnviarSolicitudes(SatJob job, CancellationToken token)
         {
+            var ahora = DateTime.UtcNow;
+            var intervalo = Math.Max(SatJobService.IntervaloMinimoEntreClientesMin, job.IntervaloEntreClientesMin);
+
             var clientes = await _jobs.ObtenerClientesJobAsync(job.Id);
 
-            foreach (var jc in clientes)
+            // Clientes a los que ya les toca, en el orden escalonado (= orden alfabético)
+            var listos = clientes
+                .Where(c => EstaListoParaEnviar(c, ahora))
+                .OrderBy(c => c.FechaEnvioProgramada ?? DateTime.MinValue)
+                .ThenBy(c => c.Id)
+                .ToList();
+
+            foreach (var jc in listos)
             {
                 if (token.IsCancellationRequested)
                     break;
-
-                if (jc.SolicitudSatId != null)
-                    continue;
 
                 try
                 {
@@ -88,6 +120,8 @@ namespace API_asemp.Servicios.SAT
                         jc.Estado = "Error";
                         jc.MensajeError = "Cliente no tiene certificado SAT registrado.";
                         await _jobs.ActualizarClienteAsync(jc);
+
+                        // No se hizo ninguna petición al SAT → no gasta su turno de 5 min
                         continue;
                     }
 
@@ -164,6 +198,12 @@ namespace API_asemp.Servicios.SAT
 
                     await _jobs.AgregarLog(job.Id, jc.ClienteId, "SOLICITUD_SAT",
                         $"Solicitud enviada. Estado={envio.EstadoSolicitud}, Token={envio.Token}");
+
+                    // Se hizo una petición real al SAT: los que siguen esperan al menos `intervalo` min
+                    await AjustarHorariosPendientesAsync(clientes, DateTime.UtcNow, intervalo);
+
+                    // Solo UNA solicitud por ciclo → así se respeta la separación entre clientes
+                    break;
                 }
                 catch (Exception ex)
                 {
@@ -171,14 +211,70 @@ namespace API_asemp.Servicios.SAT
                     jc.MensajeError = ex.Message;
 
                     if (jc.Intentos >= job.MaxReintentos)
+                    {
                         jc.Estado = "Error";
+                    }
+                    else
+                    {
+                        // Reintento: se manda al final de la fila, `intervalo` min después del último pendiente
+                        var ultimoPendiente = clientes
+                            .Where(c => c.Id != jc.Id && EsPendiente(c))
+                            .Max(c => c.FechaEnvioProgramada);
+
+                        var baseHora = ultimoPendiente.HasValue && ultimoPendiente.Value > DateTime.UtcNow
+                            ? ultimoPendiente.Value
+                            : DateTime.UtcNow;
+
+                        jc.FechaEnvioProgramada = baseHora.AddMinutes(intervalo);
+                    }
 
                     await _jobs.ActualizarClienteAsync(jc);
                     await _jobs.AgregarLog(job.Id, jc.ClienteId, "ERROR_SOLICITUD", ex.Message);
+
+                    await AjustarHorariosPendientesAsync(clientes, DateTime.UtcNow, intervalo);
+                    break;
                 }
             }
 
-            await _jobs.CambiarEstadoJobAsync(job.Id, "Verificando");
+            // Cuando ya no queda ningún cliente por solicitar, el job pasa a verificar
+            if (!clientes.Any(EsPendiente))
+                await _jobs.CambiarEstadoJobAsync(job.Id, "Verificando");
+        }
+
+        // =========================================================
+        // HELPERS DEL ENVÍO ESCALONADO
+        // =========================================================
+        private static bool EsPendiente(SatJobCliente c)
+            => c.SolicitudSatId == null && c.Estado == "Pendiente";
+
+        private static bool EstaListoParaEnviar(SatJobCliente c, DateTime ahoraUtc)
+            => EsPendiente(c) && (c.FechaEnvioProgramada == null || c.FechaEnvioProgramada <= ahoraUtc);
+
+        /// <summary>
+        /// Garantiza que entre una solicitud y la siguiente haya al menos `intervaloMin` minutos,
+        /// aunque el servidor haya estado apagado o el ciclo se haya retrasado.
+        /// Si todo va a tiempo no modifica nada.
+        /// </summary>
+        private async Task AjustarHorariosPendientesAsync(
+            IEnumerable<SatJobCliente> clientes, DateTime ultimoEnvioUtc, int intervaloMin)
+        {
+            var minimo = ultimoEnvioUtc.AddMinutes(intervaloMin);
+
+            var pendientes = clientes
+                .Where(EsPendiente)
+                .OrderBy(c => c.FechaEnvioProgramada ?? DateTime.MinValue)
+                .ThenBy(c => c.Id)
+                .ToList();
+
+            foreach (var p in pendientes)
+            {
+                if (p.FechaEnvioProgramada == null || p.FechaEnvioProgramada < minimo)
+                    p.FechaEnvioProgramada = minimo;
+
+                minimo = p.FechaEnvioProgramada.Value.AddMinutes(intervaloMin);
+            }
+
+            await _db.SaveChangesAsync();
         }
 
 
@@ -438,13 +534,23 @@ namespace API_asemp.Servicios.SAT
             }
 
             // =========================================================
-            // 7) SI TODOS TERMINARON → MARCAR JOB COMO FINALIZADO
+            // 7) SI TODOS TERMINARON → FINALIZAR (o reprogramar si es diario)
             // =========================================================
             if (clientes.All(c => c.Estado is "Terminado" or "SinCFDI" or "Error"))
             {
-                await _jobs.CambiarEstadoJobAsync(job.Id, "Terminado");
-                await _jobs.AgregarLog(job.Id, null, "JOB_FINALIZADO",
-                    "Todos los clientes finalizaron.");
+                if (job.Recurrencia == "Diaria")
+                {
+                    // Descarga diaria: se deja listo para el día siguiente a la misma hora
+                    await _jobs.AgregarLog(job.Id, null, "CICLO_DIARIO_FINALIZADO",
+                        "Todos los clientes finalizaron el ciclo de hoy.");
+                    await _jobs.ReprogramarJobDiarioAsync(job.Id);
+                }
+                else
+                {
+                    await _jobs.CambiarEstadoJobAsync(job.Id, "Terminado");
+                    await _jobs.AgregarLog(job.Id, null, "JOB_FINALIZADO",
+                        "Todos los clientes finalizaron.");
+                }
             }
         }
 

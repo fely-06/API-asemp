@@ -8,6 +8,10 @@
         public int ClienteId { get; set; }
         public int? SolicitudSatId { get; set; }
 
+        // Hora (UTC) a partir de la cual se puede enviar la solicitud de este cliente.
+        // Escalonada: FechaProgramada del job + (posición alfabética * IntervaloEntreClientesMin)
+        public DateTime? FechaEnvioProgramada { get; set; }
+
         public string Estado { get; set; } = "Pendiente";
         public int Intentos { get; set; } = 0;
         public string? MensajeError { get; set; }
